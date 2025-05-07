@@ -14,10 +14,8 @@ extern "C" {
 const size_t XEV_SIZEOF_LOOP = 512;
 const size_t XEV_SIZEOF_COMPLETION = 320;
 const size_t XEV_SIZEOF_WATCHER = 256;
-const size_t XEV_SIZEOF_THREADPOOL = 64;
-const size_t XEV_SIZEOF_THREADPOOL_BATCH = 24;
+const size_t XEV_SIZEOF_THREADPOOL = 400;
 const size_t XEV_SIZEOF_THREADPOOL_TASK = 24;
-const size_t XEV_SIZEOF_THREADPOOL_CONFIG = 64;
 
 #if __STDC_VERSION__ >= 201112L || __cplusplus >= 201103L
 typedef max_align_t XEV_ALIGN_T;
@@ -37,9 +35,7 @@ typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_LOOP - sizeof(XEV_ALI
 typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_COMPLETION - sizeof(XEV_ALIGN_T)]; } xev_completion;
 typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_WATCHER - sizeof(XEV_ALIGN_T)]; } xev_watcher;
 typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL - sizeof(XEV_ALIGN_T)]; } xev_threadpool;
-typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL_BATCH - sizeof(XEV_ALIGN_T)]; } xev_threadpool_batch;
 typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL_TASK - sizeof(XEV_ALIGN_T)]; } xev_threadpool_task;
-typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL_CONFIG - sizeof(XEV_ALIGN_T)]; } xev_threadpool_config;
 
 /* Callback types. */
 typedef enum { XEV_DISARM = 0, XEV_REARM = 1 } xev_cb_action;
@@ -71,19 +67,11 @@ void xev_loop_update_now(xev_loop* loop);
 void xev_completion_zero(xev_completion* c);
 xev_completion_state_t xev_completion_state(xev_completion* c);
 
-void xev_threadpool_config_init(xev_threadpool_config* config);
-void xev_threadpool_config_set_stack_size(xev_threadpool_config* config, uint32_t v);
-void xev_threadpool_config_set_max_threads(xev_threadpool_config* config, uint32_t v);
-
-int xev_threadpool_init(xev_threadpool* pool, xev_threadpool_config* config);
+int xev_threadpool_init(xev_threadpool* pool, size_t max_threads);
 void xev_threadpool_deinit(xev_threadpool* pool);
-void xev_threadpool_shutdown(xev_threadpool* pool);
-void xev_threadpool_schedule(xev_threadpool* pool, xev_threadpool_batch *batch);
+void xev_threadpool_schedule(xev_threadpool* pool, xev_threadpool_task *task);
 
 void xev_threadpool_task_init(xev_threadpool_task* t, xev_task_cb cb);
-void xev_threadpool_batch_init(xev_threadpool_batch* b);
-void xev_threadpool_batch_push_task(xev_threadpool_batch* b, xev_threadpool_task *t);
-void xev_threadpool_batch_push_batch(xev_threadpool_batch* b, xev_threadpool_batch *other);
 
 int xev_timer_init(xev_watcher *w);
 void xev_timer_deinit(xev_watcher *w);
