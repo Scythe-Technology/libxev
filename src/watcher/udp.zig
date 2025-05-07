@@ -913,9 +913,8 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
             callback_info_count = 0;
             callback_info_count2 = 0;
 
-            var tpool = ThreadPool.init(.{});
+            var tpool = ThreadPool.init(std.Thread.getCpuCount() catch 1);
             defer tpool.deinit();
-            defer tpool.shutdown();
             var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
@@ -1014,9 +1013,8 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
             callback_info_count = 0;
             callback_info_count2 = 0;
 
-            var tpool = ThreadPool.init(.{});
+            var tpool = ThreadPool.init(std.Thread.getCpuCount() catch 1);
             defer tpool.deinit();
-            defer tpool.shutdown();
             var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 

@@ -6,9 +6,8 @@ const xev = @import("xev");
 pub const NUM_TIMERS: usize = 10 * 1000 * 1000;
 
 pub fn main() !void {
-    var thread_pool = xev.ThreadPool.init(.{});
+    var thread_pool = xev.ThreadPool.init(std.Thread.getCpuCount() catch 1);
     defer thread_pool.deinit();
-    defer thread_pool.shutdown();
 
     if (xev.dynamic) try xev.detect();
     var loop = try xev.Loop.init(.{

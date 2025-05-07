@@ -578,9 +578,8 @@ fn FileTests(
 
             const testing = std.testing;
 
-            var tpool = main.ThreadPool.init(.{});
+            var tpool = main.ThreadPool.init(std.Thread.getCpuCount() catch 1);
             defer tpool.deinit();
-            defer tpool.shutdown();
             var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
@@ -652,9 +651,8 @@ fn FileTests(
 
             const testing = std.testing;
 
-            var tpool = main.ThreadPool.init(.{});
+            var tpool = main.ThreadPool.init(std.Thread.getCpuCount() catch 1);
             defer tpool.deinit();
-            defer tpool.shutdown();
             var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
@@ -724,9 +722,8 @@ fn FileTests(
 
             const testing = std.testing;
 
-            var tpool = main.ThreadPool.init(.{});
+            var tpool = main.ThreadPool.init(std.Thread.getCpuCount() catch 1);
             defer tpool.deinit();
-            defer tpool.shutdown();
             var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
@@ -817,6 +814,52 @@ fn FileTests(
 
             try loop.run(.until_done);
             try testing.expectEqualSlices(u8, "12345678", read_buf[0..read_len]);
+        }
+
+        test "early close" {
+            // wasi: local files don't work with poll (always ready)
+            if (builtin.os.tag == .wasi) return error.SkipZigTest;
+            // windows: std.fs.File is not opened with OVERLAPPED flag.
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+            // const testing = std.testing;
+
+            var tpool = main.ThreadPool.init(std.Thread.getCpuCount() catch 1);
+            defer tpool.deinit();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
+            defer loop.deinit();
+
+            // Create our file
+            const path = "test_watcher_file";
+            var f = try std.fs.cwd().createFile(path, .{
+                .read = true,
+                .truncate = true,
+            });
+            defer std.fs.cwd().deleteFile(path) catch {};
+
+            const file = try Impl.init(f);
+
+            // Perform a write and then a read
+            var write_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
+            var c_write: xev.Completion = undefined;
+            file.write(&loop, &c_write, .{ .slice = &write_buf }, std.fs.File, &f, (struct {
+                fn callback(
+                    ud: ?*std.fs.File,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Impl,
+                    _: xev.WriteBuffer,
+                    r: xev.WriteError!usize,
+                ) xev.CallbackAction {
+                    const f_inner = ud orelse unreachable;
+                    defer f_inner.close();
+                    _ = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+
+            // Wait for the write
+            try loop.run(.until_done);
         }
     };
 }

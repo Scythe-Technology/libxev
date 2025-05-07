@@ -524,7 +524,7 @@ pub const Loop = struct {
         self.active += 1;
 
         // Schedule it, from this point forward its not safe to touch c.
-        pool.schedule(ThreadPool.Batch.from(&c.task));
+        pool.schedule(&c.task);
     }
 
     /// This is the main callback for the threadpool to perform work

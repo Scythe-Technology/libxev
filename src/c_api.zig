@@ -45,30 +45,11 @@ export fn xev_completion_state(c: *xev.Completion) xev.CompletionState {
 //-------------------------------------------------------------------
 // ThreadPool
 
-export fn xev_threadpool_config_init(cfg: *xev.ThreadPool.Config) void {
-    cfg.* = .{};
-}
-
-export fn xev_threadpool_config_set_stack_size(
-    cfg: *xev.ThreadPool.Config,
-    v: u32,
-) void {
-    cfg.stack_size = v;
-}
-
-export fn xev_threadpool_config_set_max_threads(
-    cfg: *xev.ThreadPool.Config,
-    v: u32,
-) void {
-    cfg.max_threads = v;
-}
-
 export fn xev_threadpool_init(
     threadpool: *xev.ThreadPool,
-    cfg_: ?*xev.ThreadPool.Config,
+    max_thread: usize,
 ) c_int {
-    const cfg: xev.ThreadPool.Config = if (cfg_) |v| v.* else .{};
-    threadpool.* = xev.ThreadPool.init(cfg);
+    threadpool.* = xev.ThreadPool.init(if (max_thread > 0) max_thread else std.Thread.getCpuCount() catch 1);
     return 0;
 }
 
@@ -76,15 +57,11 @@ export fn xev_threadpool_deinit(threadpool: *xev.ThreadPool) void {
     threadpool.deinit();
 }
 
-export fn xev_threadpool_shutdown(threadpool: *xev.ThreadPool) void {
-    threadpool.shutdown();
-}
-
 export fn xev_threadpool_schedule(
     pool: *xev.ThreadPool,
-    batch: *xev.ThreadPool.Batch,
+    task: *xev.ThreadPool.Task,
 ) void {
-    pool.schedule(batch.*);
+    pool.schedule(task);
 }
 
 export fn xev_threadpool_task_init(
@@ -105,24 +82,6 @@ export fn xev_threadpool_task_init(
             }
         }).callback,
     };
-}
-
-export fn xev_threadpool_batch_init(b: *xev.ThreadPool.Batch) void {
-    b.* = .{};
-}
-
-export fn xev_threadpool_batch_push_task(
-    b: *xev.ThreadPool.Batch,
-    t: *xev.ThreadPool.Task,
-) void {
-    b.push(xev.ThreadPool.Batch.from(t));
-}
-
-export fn xev_threadpool_batch_push_batch(
-    b: *xev.ThreadPool.Batch,
-    other: *xev.ThreadPool.Batch,
-) void {
-    b.push(other.*);
 }
 
 //-------------------------------------------------------------------
@@ -348,8 +307,6 @@ test "c-api sizes" {
     try testing.expect(@sizeOf(Completion) <= 320);
     try testing.expect(@sizeOf(xev.Async) <= 256);
     try testing.expect(@sizeOf(xev.Timer) <= 256);
-    try testing.expectEqual(@as(usize, 48), @sizeOf(xev.ThreadPool));
-    try testing.expectEqual(@as(usize, 24), @sizeOf(xev.ThreadPool.Batch));
+    try testing.expectEqual(@as(usize, 384), @sizeOf(xev.ThreadPool));
     try testing.expectEqual(@as(usize, 24), @sizeOf(Task));
-    try testing.expectEqual(@as(usize, 8), @sizeOf(xev.ThreadPool.Config));
 }

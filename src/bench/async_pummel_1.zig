@@ -17,9 +17,8 @@ pub fn main() !void {
 }
 
 pub fn run(comptime thread_count: comptime_int) !void {
-    var thread_pool = xev.ThreadPool.init(.{});
+    var thread_pool = xev.ThreadPool.init(std.Thread.getCpuCount() catch 1);
     defer thread_pool.deinit();
-    defer thread_pool.shutdown();
 
     if (xev.dynamic) try xev.detect();
     var loop = try xev.Loop.init(.{

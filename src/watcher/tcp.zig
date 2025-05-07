@@ -504,9 +504,8 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
 
             const testing = std.testing;
 
-            var tpool = ThreadPool.init(.{});
+            var tpool = ThreadPool.init(std.Thread.getCpuCount() catch 1);
             defer tpool.deinit();
-            defer tpool.shutdown();
             var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
@@ -701,9 +700,8 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
 
             const testing = std.testing;
 
-            var tpool = ThreadPool.init(.{});
+            var tpool = ThreadPool.init(std.Thread.getCpuCount() catch 1);
             defer tpool.deinit();
-            defer tpool.shutdown();
             var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 

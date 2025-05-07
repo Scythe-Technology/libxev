@@ -935,7 +935,7 @@ pub const Loop = struct {
                 c.task = .{ .callback = thread_perform };
 
                 // Schedule it, from this point forward its not safe to touch c.
-                pool.schedule(ThreadPool.Batch.from(&c.task));
+                pool.schedule(&c.task);
 
                 return false;
             },
@@ -2477,9 +2477,8 @@ test "kqueue: socket accept/connect/send/recv/close" {
 test "kqueue: file IO on thread pool" {
     const testing = std.testing;
 
-    var tpool = main.ThreadPool.init(.{});
+    var tpool = main.ThreadPool.init(std.Thread.getCpuCount() catch 1);
     defer tpool.deinit();
-    defer tpool.shutdown();
     var loop = try Loop.init(.{ .thread_pool = &tpool });
     defer loop.deinit();
 
