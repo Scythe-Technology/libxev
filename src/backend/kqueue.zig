@@ -1039,9 +1039,12 @@ pub const Loop = struct {
         // Add to our completion queue
         c.task_loop.thread_pool_completions.push(c);
 
-        if (comptime builtin.target.os.tag == .macos) {
-            // Wake up our main loop
-            c.task_loop.wakeup() catch {};
+        switch (comptime builtin.target.os.tag) {
+            .macos, .freebsd => {
+                // Wake up our main loop
+                c.task_loop.wakeup() catch {};
+            },
+            else => {},
         }
     }
 
@@ -1566,26 +1569,55 @@ const Wakeup = if (builtin.os.tag.isDarwin()) struct {
         try self.mach_port.notify();
     }
 } else struct {
-    // TODO: We should use eventfd for FreeBSD. Until this is
-    // implemented, loop wakeup will crash on BSD.
     const Self = @This();
 
+    read_fd: posix.fd_t,
+    write_fd: posix.fd_t,
+
     fn init() !Self {
-        return .{};
+        const fds = try posix.pipe();
+        errdefer posix.close(fds[0]);
+        errdefer posix.close(fds[1]);
+
+        return .{
+            .read_fd = fds[0],
+            .write_fd = fds[1],
+        };
     }
 
     fn deinit(self: *Self) void {
-        _ = self;
+        posix.close(self.read_fd);
+        posix.close(self.write_fd);
     }
 
     fn setup(self: *Self, kqueue_fd: posix.fd_t) !void {
-        _ = self;
-        _ = kqueue_fd;
+        const events = [_]Kevent{.{
+            .ident = @intCast(self.read_fd),
+            .filter = posix.system.EVFILT.READ,
+            .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
+            .fflags = 0,
+            .data = 0,
+            .udata = 0,
+        }};
+        const n = try kevent_syscall(
+            kqueue_fd,
+            &events,
+            events[0..0],
+            null,
+        );
+        assert(n == 0);
     }
 
     fn wakeup(self: *Self) !void {
-        _ = self;
-        @panic("wakeup not implemented on this platform");
+        const buf = [_]u8{1};
+        const iov = [_]posix.iovec_const{.{
+            .base = &buf,
+            .len = buf.len,
+        }};
+        _ = posix.writev(self.write_fd, &iov) catch |err| switch (err) {
+            error.WouldBlock => {},
+            else => return err,
+        };
     }
 };
 
