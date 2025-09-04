@@ -386,7 +386,7 @@ pub const Loop = struct {
 
             // Determine our next timeout based on the timers.
             const timeout: ?windows.DWORD = timeout: {
-                if (wait == 0)
+                if (wait == 0 or wait_rem == 0)
                     break :timeout 0;
                 // If we have a timer, we want to set the timeout to our next timer value. If we
                 // have no timer, we wait forever.
