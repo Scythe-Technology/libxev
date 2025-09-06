@@ -899,8 +899,6 @@ pub const Loop = struct {
             .timer => |*v| {
                 const c = completion;
 
-                if (c.flags.state == .active) {}
-
                 case: switch (c.flags.state) {
                     .active => {
                         // Timers needs to be removed from the timer heap.
@@ -934,38 +932,37 @@ pub const Loop = struct {
             else => unreachable,
         }
 
-        defer if (completion.flags.state != .dead) {
-            // Mark the completion as done
-            completion.flags.state = .dead;
-
-            const close_dup = completion.flags.dup;
-            switch (completion.op) {
-                .noop, .cancel => {},
-                .timer => unreachable,
-                inline else => |_, op| {
-                    const action = completion.callback(
-                        completion.userdata,
-                        self,
-                        completion,
-                        @unionInit(Result, @tagName(op), error.Canceled),
-                    );
-                    switch (action) {
-                        .disarm => {
-                            if (maybe_fd) |fd| {
-                                if (close_dup) {
-                                    posix.close(fd);
-                                }
-                            }
-                        },
-                        .rearm => self.start(completion),
-                    }
-                },
-            }
-        };
-
         // Decrement the active count so we know how many are running for
         // .until_done run semantics.
-        if (completion.flags.state == .active) self.active -= 1;
+        if (completion.flags.state == .active)
+            self.active -= 1;
+
+        // Mark the completion as done
+        completion.flags.state = .dead;
+
+        const close_dup = completion.flags.dup;
+        switch (completion.op) {
+            .noop, .cancel => {},
+            .timer => unreachable,
+            inline else => |_, op| {
+                const action = completion.callback(
+                    completion.userdata,
+                    self,
+                    completion,
+                    @unionInit(Result, @tagName(op), error.Canceled),
+                );
+                switch (action) {
+                    .disarm => {
+                        if (maybe_fd) |fd| {
+                            if (close_dup) {
+                                posix.close(fd);
+                            }
+                        }
+                    },
+                    .rearm => self.start(completion),
+                }
+            },
+        }
     }
 };
 
