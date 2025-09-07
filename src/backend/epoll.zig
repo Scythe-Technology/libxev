@@ -885,16 +885,17 @@ pub const Loop = struct {
 
     fn stop_completion(self: *Loop, completion: *Completion) void {
         // Delete. This should never fail.
-        const maybe_fd = if (completion.flags.dup) completion.flags.dup_fd else completion.fd();
-        if (maybe_fd) |fd| {
-            if (completion.flags.state == .active) {
-                posix.epoll_ctl(
-                    self.fd,
-                    linux.EPOLL.CTL_DEL,
-                    fd,
-                    null,
-                ) catch unreachable;
-            }
+        const maybe_fd = completion.any_fd();
+        if (completion.has_fd()) {
+            if (maybe_fd) |fd|
+                if (completion.flags.state == .active) {
+                    posix.epoll_ctl(
+                        self.fd,
+                        linux.EPOLL.CTL_DEL,
+                        fd,
+                        null,
+                    ) catch unreachable;
+                };
         } else switch (completion.op) {
             .timer => |*v| {
                 const c = completion;
@@ -954,9 +955,8 @@ pub const Loop = struct {
                 switch (action) {
                     .disarm => {
                         if (maybe_fd) |fd| {
-                            if (close_dup) {
+                            if (close_dup)
                                 posix.close(fd);
-                            }
                         }
                     },
                     .rearm => self.start(completion),
@@ -1163,12 +1163,28 @@ pub const Completion = struct {
         };
     }
 
+    fn has_fd(self: *Completion) bool {
+        return self.flags.dup or self.fd() != null;
+    }
+
+    /// Return the fd for the completion.
+    fn any_fd(self: *Completion) ?posix.fd_t {
+        const base_fd = self.fd() orelse return null;
+        if (!self.flags.dup)
+            return base_fd;
+        if (self.flags.dup_fd > 0)
+            return self.flags.dup_fd;
+        return null;
+    }
+
     /// Return the fd for the completion. This will perform a dup(2) if
     /// requested.
     fn fd_maybe_dup(self: *Completion) error{DupFailed}!posix.fd_t {
         const old_fd = self.fd().?;
-        if (!self.flags.dup) return old_fd;
-        if (self.flags.dup_fd > 0) return self.flags.dup_fd;
+        if (!self.flags.dup)
+            return old_fd;
+        if (self.flags.dup_fd > 0)
+            return self.flags.dup_fd;
 
         self.flags.dup_fd = posix.dup(old_fd) catch return error.DupFailed;
         return self.flags.dup_fd;
