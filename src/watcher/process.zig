@@ -334,7 +334,7 @@ fn ProcessIocp(comptime xev: type) type {
                                                 std.debug.assert(message.value == pid);
 
                                             return .rearm;
-                                        },
+                                        } else return .rearm,
                                         .JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
                                         => b: {
                                             const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
