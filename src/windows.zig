@@ -177,6 +177,7 @@ pub const exp = struct {
             const err = windows.kernel32.GetLastError();
             return switch (err) {
                 .IO_PENDING => null,
+                .BROKEN_PIPE => error.BrokenPipe,
                 else => windows.unexpectedError(err),
             };
         }
@@ -195,6 +196,7 @@ pub const exp = struct {
             const err = windows.kernel32.GetLastError();
             return switch (err) {
                 .IO_PENDING => null,
+                .BROKEN_PIPE => error.BrokenPipe,
                 else => windows.unexpectedError(err),
             };
         }
