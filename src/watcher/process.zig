@@ -325,11 +325,21 @@ fn ProcessIocp(comptime xev: type) type {
                                     const result_inner = switch (message.type) {
                                         .JOB_OBJECT_MSG_EXIT_PROCESS,
                                         .JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS,
+                                        => if (builtin.is_test) {
+                                            const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
+                                            const pid = windows.exp.kernel32.GetProcessId(process);
+
+                                            // if (message.value != pid) return .rearm;
+                                            if (pid != 0)
+                                                std.debug.assert(message.value == pid);
+
+                                            return .rearm;
+                                        },
+                                        .JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
                                         => b: {
                                             const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
                                             const pid = windows.exp.kernel32.GetProcessId(process);
                                             if (pid == 0) break :b WaitError.Unexpected;
-                                            if (message.value != pid) return .rearm;
 
                                             var exit_code: windows.DWORD = undefined;
                                             const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != 0;
