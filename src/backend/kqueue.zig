@@ -255,7 +255,7 @@ pub const Loop = struct {
                     // If we're deleting then we create a deletion event and
                     // queue the completion to notify cancellation.
                     .deleting => if (c.kevent()) |ev| {
-                        const ecanceled = -1 * @as(i32, @intCast(@intFromEnum(posix.system.E.CANCELED)));
+                        const ecanceled = errno_to_result(.CANCELED);
                         c.result = c.syscall_result(ecanceled);
                         c.flags.state = .dead;
                         self.completions.push(c);
@@ -839,7 +839,7 @@ pub const Loop = struct {
                         },
 
                         // Any other error we report
-                        else => break :action .{ .result = result },
+                        else => |errno| break :action .{ .result = errno_to_result(errno) },
                     }
                 }
             },
@@ -901,7 +901,11 @@ pub const Loop = struct {
                     .both => posix.SHUT.RDWR,
                 });
 
-                break :action .{ .result = result };
+                if (result >= 0) {
+                    break :action .{ .result = result };
+                } else {
+                    break :action .{ .result = errno_to_result(posix.errno(result)) };
+                }
             },
 
             .close => |v| action: {
@@ -948,7 +952,7 @@ pub const Loop = struct {
                     // We use EPERM as a way to note there is no thread
                     // pool. We can change this in the future if there is
                     // a better choice.
-                    const eperm = -1 * @as(i32, @intCast(@intFromEnum(posix.system.E.PERM)));
+                    const eperm = errno_to_result(.PERM);
                     c.result = c.syscall_result(eperm);
                     self.completions.push(c);
                     return false;
@@ -1491,6 +1495,7 @@ pub const Completion = struct {
                 .shutdown = switch (errno) {
                     .SUCCESS => {},
                     .CANCELED => error.Canceled,
+                    .NOTCONN => error.SocketNotConnected,
                     else => |err| posix.unexpectedErrno(err),
                 },
             },
@@ -1974,6 +1979,11 @@ fn kevent_syscall(
             else => unreachable,
         }
     }
+}
+
+/// Converts a posix errno to the negative i32 format expected by syscall_result.
+inline fn errno_to_result(errno: posix.E) i32 {
+    return -@as(i32, @intCast(@intFromEnum(errno)));
 }
 
 /// kevent_init initializes a Kevent from an posix.Kevent. This is used when
