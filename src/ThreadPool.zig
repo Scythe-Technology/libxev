@@ -37,6 +37,12 @@
 const Pool = @This();
 
 const std = @import("std");
+const Io = std.Io;
+
+// I know we shouldn't use a global io here, but we are doing this
+// during the transition period so libxev is at least usable with Zig
+// 0.16 until we do a cleaner transition.
+const io = Io.Threaded.global_single_threaded.io();
 
 sync: std.atomic.Value(Sync) align(std.atomic.cache_line),
 idle: std.atomic.Value(u32) = .{ .raw = 0 },
@@ -69,10 +75,10 @@ pub fn deinit(self: *Pool) void {
     const sync = self.sync.fetchAdd(.{ .shutdown = true }, .acq_rel);
     if (sync.idle > 0) {
         _ = self.idle.fetchOr(2, .release);
-        std.Thread.Futex.wake(&self.idle, std.math.maxInt(u32));
+        io.futexWake(u32, &self.idle.raw, std.math.maxInt(u32));
     }
     if (sync.spawnable == sync.max) self.join.store(2, .monotonic);
-    while (self.join.swap(1, .acquire) <= 1) std.Thread.Futex.wait(&self.join, 1);
+    while (self.join.swap(1, .acquire) <= 1) io.futexWaitUncancelable(u32, &self.join.raw, 1);
     self.* = undefined;
 }
 
@@ -118,16 +124,16 @@ fn notify(self: *Pool, curr: Sync) void {
     }
 
     _ = self.idle.fetchOr(1, .release);
-    std.Thread.Futex.wake(&self.idle, 1);
+    io.futexWake(u32, &self.idle.raw, 1);
 }
 
 noinline fn finish(self: *Pool) void {
     const sync = self.sync.fetchAdd(Sync.delta(.{ .spawnable = 1 }, .{ .idle = 1 }), .acq_rel);
     if (sync.shutdown and sync.spawnable + 1 == sync.max) {
         if (self.workers.load(.acquire)) |worker| {
-            if (worker.join.swap(2, .release) > 0) std.Thread.Futex.wake(&worker.join, 1);
+            if (worker.join.swap(2, .release) > 0) io.futexWake(u32, &worker.join.raw, 1);
         }
-        if (self.join.swap(2, .release) > 0) std.Thread.Futex.wake(&self.join, 1);
+        if (self.join.swap(2, .release) > 0) io.futexWake(u32, &self.join.raw, 1);
     }
 }
 
@@ -177,9 +183,9 @@ const Worker = struct {
         while (self.poll(pool)) |task| task.callback(task);
 
         pool.finish();
-        while (self.join.swap(1, .acquire) <= 1) std.Thread.Futex.wait(&self.join, 1);
+        while (self.join.swap(1, .acquire) <= 1) io.futexWaitUncancelable(u32, &self.join.raw, 1);
         if (self.next) |worker| {
-            if (worker.join.swap(2, .release) > 0) std.Thread.Futex.wake(&worker.join, 1);
+            if (worker.join.swap(2, .release) > 0) io.futexWake(u32, &worker.join.raw, 1);
         }
     }
 
@@ -224,7 +230,7 @@ const Worker = struct {
 
             var idle = pool.idle.load(.acquire);
             while (true) {
-                while (idle == 0) : (idle = pool.idle.load(.acquire)) std.Thread.Futex.wait(&pool.idle, 0);
+                while (idle == 0) : (idle = pool.idle.load(.acquire)) io.futexWaitUncancelable(u32, &pool.idle.raw, 0);
                 if (idle == 1) idle = pool.idle.cmpxchgStrong(1, 0, .acquire, .acquire) orelse break;
                 if (idle >= 2) return null;
             }

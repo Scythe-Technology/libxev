@@ -4,11 +4,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const posix = std.posix;
+const xev_posix = @import("../posix.zig");
+const net = xev_posix.net;
 const queue = @import("../queue.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const heap = @import("../heap.zig");
 const ThreadPool = @import("../ThreadPool.zig");
 const Async = @import("../main.zig").Kqueue.Async;
+const KEventError = std.Io.Kqueue.KEventError;
 
 const looppkg = @import("../loop.zig");
 const Options = looppkg.Options;
@@ -105,8 +108,8 @@ pub const Loop = struct {
     /// for what options matter for kqueue.
     pub fn init(options: Options) !Loop {
         // This creates a new kqueue fd
-        const fd = try posix.kqueue();
-        errdefer posix.close(fd);
+        const fd = try createKqueueFd();
+        errdefer xev_posix.close(fd);
 
         const wakeup_state: Wakeup = try .init();
         errdefer wakeup_state.deinit();
@@ -126,7 +129,7 @@ pub const Loop = struct {
     /// Deinitialize the loop, this closes the kqueue. Any events that
     /// were unprocessed are lost -- their callbacks will never be called.
     pub fn deinit(self: *Loop) void {
-        posix.close(self.kqueue_fd);
+        xev_posix.close(self.kqueue_fd);
         self.wakeup_state.deinit();
     }
 
@@ -677,9 +680,10 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        self.cached_now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch {
-            return;
-        };
+        switch (posix.errno(posix.system.clock_gettime(posix.CLOCK.MONOTONIC, &self.cached_now))) {
+            .SUCCESS => {},
+            else => {},
+        }
     }
 
     pub fn countPending(self: *Loop, comptime opts: struct { timers: bool }) usize {
@@ -909,7 +913,7 @@ pub const Loop = struct {
             },
 
             .close => |v| action: {
-                posix.close(v.fd);
+                xev_posix.close(v.fd);
                 break :action .{ .result = 0 };
             },
 
@@ -1240,7 +1244,7 @@ pub const Completion = struct {
             },
 
             .accept => |*op| .{
-                .accept = if (posix.accept(
+                .accept = if (xev_posix.accept(
                     op.socket,
                     &op.addr,
                     &op.addr_size,
@@ -1252,34 +1256,34 @@ pub const Completion = struct {
             },
 
             .connect => |*op| .{
-                .connect = if (posix.getsockoptError(op.socket)) {} else |err| err,
+                .connect = if (getsockoptError(op.socket)) {} else |err| err,
             },
 
             .write => |*op| .{
                 .write = switch (op.buffer) {
-                    .slice => |v| posix.write(op.fd, v),
-                    .array => |*v| posix.write(op.fd, v.array[0..v.len]),
+                    .slice => |v| xev_posix.write(op.fd, v) catch |err| mapWriteError(err),
+                    .array => |*v| xev_posix.write(op.fd, v.array[0..v.len]) catch |err| mapWriteError(err),
                 },
             },
 
             .pwrite => |*op| .{
                 .pwrite = switch (op.buffer) {
-                    .slice => |v| posix.pwrite(op.fd, v, op.offset),
-                    .array => |*v| posix.pwrite(op.fd, v.array[0..v.len], op.offset),
+                    .slice => |v| xev_posix.pwrite(op.fd, v, op.offset) catch |err| mapWriteError(err),
+                    .array => |*v| xev_posix.pwrite(op.fd, v.array[0..v.len], op.offset) catch |err| mapWriteError(err),
                 },
             },
 
             .send => |*op| .{
                 .send = switch (op.buffer) {
-                    .slice => |v| posix.send(op.fd, v, 0),
-                    .array => |*v| posix.send(op.fd, v.array[0..v.len], 0),
+                    .slice => |v| xev_posix.send(op.fd, v, 0) catch |err| mapWriteError(err),
+                    .array => |*v| xev_posix.send(op.fd, v.array[0..v.len], 0) catch |err| mapWriteError(err),
                 },
             },
 
             .sendto => |*op| .{
                 .sendto = switch (op.buffer) {
-                    .slice => |v| posix.sendto(op.fd, v, 0, &op.addr.any, op.addr.getOsSockLen()),
-                    .array => |*v| posix.sendto(op.fd, v.array[0..v.len], 0, &op.addr.any, op.addr.getOsSockLen()),
+                    .slice => |v| xev_posix.sendto(op.fd, v, 0, &op.addr.any, op.addr.getOsSockLen()) catch |err| mapWriteError(err),
+                    .array => |*v| xev_posix.sendto(op.fd, v.array[0..v.len], 0, &op.addr.any, op.addr.getOsSockLen()) catch |err| mapWriteError(err),
                 },
             },
 
@@ -1289,8 +1293,8 @@ pub const Completion = struct {
                         const ev = ev_ orelse
                             break :res .{ .read = error.MissingKevent };
                         break :empty @intCast(ev.data);
-                    } else posix.read(op.fd, v),
-                    .array => |*v| posix.read(op.fd, v),
+                    } else xev_posix.read(op.fd, v) catch |err| mapReadError(err),
+                    .array => |*v| xev_posix.read(op.fd, v) catch |err| mapReadError(err),
                 };
 
                 break :res .{
@@ -1307,8 +1311,8 @@ pub const Completion = struct {
                         const ev = ev_ orelse
                             break :res .{ .read = error.MissingKevent };
                         break :empty @intCast(ev.data);
-                    } else posix.pread(op.fd, v, op.offset),
-                    .array => |*v| posix.pread(op.fd, v, op.offset),
+                    } else xev_posix.pread(op.fd, v, op.offset) catch |err| mapReadError(err),
+                    .array => |*v| xev_posix.pread(op.fd, v, op.offset) catch |err| mapReadError(err),
                 };
 
                 break :res .{
@@ -1325,8 +1329,8 @@ pub const Completion = struct {
                         const ev = ev_ orelse
                             break :res .{ .read = error.MissingKevent };
                         break :empty @intCast(ev.data);
-                    } else posix.recv(op.fd, v, 0),
-                    .array => |*v| posix.recv(op.fd, v, 0),
+                    } else xev_posix.recv(op.fd, v, 0) catch |err| mapReadError(err),
+                    .array => |*v| xev_posix.recv(op.fd, v, 0) catch |err| mapReadError(err),
                 };
 
                 break :res .{
@@ -1343,8 +1347,8 @@ pub const Completion = struct {
                         const ev = ev_ orelse
                             break :res .{ .read = error.MissingKevent };
                         break :empty @intCast(ev.data);
-                    } else posix.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size),
-                    .array => |*v| posix.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size),
+                    } else xev_posix.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size) catch |err| mapReadError(err),
+                    .array => |*v| xev_posix.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size) catch |err| mapReadError(err),
                 };
 
                 break :res .{
@@ -1378,7 +1382,7 @@ pub const Completion = struct {
             },
 
             .close => |*op| res: {
-                posix.close(op.fd);
+                xev_posix.close(op.fd);
                 break :res .{ .close = {} };
             },
         };
@@ -1495,7 +1499,7 @@ pub const Completion = struct {
                 .shutdown = switch (errno) {
                     .SUCCESS => {},
                     .CANCELED => error.Canceled,
-                    .NOTCONN => error.SocketNotConnected,
+                    .NOTCONN => error.SocketUnconnected,
                     else => |err| posix.unexpectedErrno(err),
                 },
             },
@@ -1634,6 +1638,66 @@ const Wakeup = if (builtin.os.tag.isDarwin()) struct {
     }
 };
 
+fn createKqueueFd() !posix.fd_t {
+    const rc = posix.system.kqueue();
+    switch (posix.errno(rc)) {
+        .SUCCESS => return @intCast(rc),
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+fn mapReadError(err: anyerror) ReadError {
+    return switch (err) {
+        error.AccessDenied, error.PermissionDenied => error.PermissionDenied,
+        error.WouldBlock => error.MissingKevent,
+        else => error.Unexpected,
+    };
+}
+
+fn mapWriteError(err: anyerror) WriteError {
+    return switch (err) {
+        error.AccessDenied, error.PermissionDenied => error.PermissionDenied,
+        else => error.Unexpected,
+    };
+}
+
+fn monotonicNanos() i128 {
+    var ts: posix.timespec = undefined;
+    switch (posix.errno(posix.system.clock_gettime(posix.CLOCK.MONOTONIC, &ts))) {
+        .SUCCESS => {},
+        else => unreachable,
+    }
+    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+}
+
+fn getsockoptError(socket: posix.socket_t) ConnectError!void {
+    var err_code: c_int = 0;
+    var err_len: posix.socklen_t = @sizeOf(c_int);
+    const rc = std.c.getsockopt(socket, posix.SOL.SOCKET, posix.SO.ERROR, &err_code, &err_len);
+    switch (posix.errno(rc)) {
+        .SUCCESS => {},
+        else => |err| return posix.unexpectedErrno(err),
+    }
+
+    if (err_code == 0) return;
+    return switch (@as(posix.E, @enumFromInt(@as(u16, @intCast(err_code))))) {
+        .ADDRNOTAVAIL => error.AddressUnavailable,
+        .AFNOSUPPORT => error.AddressFamilyUnsupported,
+        .ACCES, .PERM => error.AccessDenied,
+        .ALREADY, .INPROGRESS => error.ConnectionPending,
+        .CONNREFUSED => error.ConnectionRefused,
+        .CONNRESET => error.ConnectionResetByPeer,
+        .HOSTUNREACH => error.HostUnreachable,
+        .NETUNREACH => error.NetworkUnreachable,
+        .TIMEDOUT => error.Timeout,
+        .NETDOWN => error.NetworkDown,
+        .NOBUFS, .NOMEM => error.SystemResources,
+        else => error.Unexpected,
+    };
+}
+
 pub const OperationType = enum {
     noop,
     accept,
@@ -1670,7 +1734,7 @@ pub const Operation = union(OperationType) {
 
     connect: struct {
         socket: posix.socket_t,
-        addr: std.net.Address,
+        addr: net.Address,
     },
 
     read: struct {
@@ -1711,7 +1775,7 @@ pub const Operation = union(OperationType) {
     sendto: struct {
         fd: posix.fd_t,
         buffer: WriteBuffer,
-        addr: std.net.Address,
+        addr: net.Address,
     },
 
     recvfrom: struct {
@@ -1727,7 +1791,7 @@ pub const Operation = union(OperationType) {
 
     shutdown: struct {
         socket: posix.socket_t,
-        how: posix.ShutdownHow = .both,
+        how: std.Io.net.ShutdownHow = .both,
     },
 
     timer: Timer,
@@ -1777,53 +1841,43 @@ pub const CancelError = error{
     Inactive,
 };
 
-pub const AcceptError = posix.KEventError || posix.AcceptError || error{
+pub const AcceptError = KEventError || std.Io.net.Server.AcceptError || error{
     Canceled,
     Unexpected,
 };
 
-pub const ConnectError = posix.KEventError || posix.ConnectError || error{
+pub const ConnectError = KEventError || std.Io.net.IpAddress.ConnectError || error{
     Canceled,
     Unexpected,
 };
 
-pub const ReadError = posix.KEventError ||
-    posix.ReadError ||
-    posix.PReadError ||
-    posix.RecvFromError ||
-    error{
-        EOF,
-        Canceled,
-        MissingKevent,
-        PermissionDenied,
-        Unexpected,
-    };
+pub const ReadError = KEventError || error{
+    EOF,
+    Canceled,
+    MissingKevent,
+    PermissionDenied,
+    Unexpected,
+};
 
-pub const WriteError = posix.KEventError ||
-    posix.WriteError ||
-    posix.PWriteError ||
-    posix.SendError ||
-    posix.SendMsgError ||
-    posix.SendToError ||
-    error{
-        Canceled,
-        PermissionDenied,
-        Unexpected,
-    };
+pub const WriteError = KEventError || error{
+    Canceled,
+    PermissionDenied,
+    Unexpected,
+};
 
-pub const MachPortError = posix.KEventError || error{
+pub const MachPortError = KEventError || error{
     Canceled,
     Unexpected,
 };
 
-pub const ProcError = posix.KEventError || error{
+pub const ProcError = KEventError || error{
     Canceled,
     MissingKevent,
     Unexpected,
     NoSuchProcess,
 };
 
-pub const ShutdownError = posix.ShutdownError || error{
+pub const ShutdownError = std.Io.net.ShutdownError || error{
     Canceled,
     Unexpected,
 };
@@ -1946,14 +2000,32 @@ fn kevent_syscall(
     changelist: []const Kevent,
     eventlist: []Kevent,
     timeout: ?*const posix.timespec,
-) posix.KEventError!usize {
-    // Normaly Kevent? Just use the normal posix.kevent call.
-    if (Kevent == posix.Kevent) return try posix.kevent(
-        kq,
-        changelist,
-        eventlist,
-        timeout,
-    );
+) KEventError!usize {
+    // Normal Kevent? Just use the normal kevent syscall.
+    if (Kevent == std.c.Kevent) {
+        while (true) {
+            const rc = posix.system.kevent(
+                kq,
+                changelist.ptr,
+                std.math.cast(c_int, changelist.len) orelse return error.Overflow,
+                eventlist.ptr,
+                std.math.cast(c_int, eventlist.len) orelse return error.Overflow,
+                timeout,
+            );
+            switch (posix.errno(rc)) {
+                .SUCCESS => return @intCast(rc),
+                .ACCES => return error.AccessDenied,
+                .FAULT => unreachable,
+                .BADF => unreachable, // Always a race condition.
+                .INTR => continue,
+                .INVAL => unreachable,
+                .NOENT => return error.EventNotFound,
+                .NOMEM => return error.SystemResources,
+                .SRCH => return error.ProcessNotFound,
+                else => unreachable,
+            }
+        }
+    }
 
     // Otherwise, we have to call the kevent64 variant.
     while (true) {
@@ -1963,7 +2035,7 @@ fn kevent_syscall(
             std.math.cast(c_int, changelist.len) orelse return error.Overflow,
             eventlist.ptr,
             std.math.cast(c_int, eventlist.len) orelse return error.Overflow,
-            0,
+            .{},
             timeout,
         );
         switch (posix.errno(rc)) {
@@ -1986,10 +2058,10 @@ inline fn errno_to_result(errno: posix.E) i32 {
     return -@as(i32, @intCast(@intFromEnum(errno)));
 }
 
-/// kevent_init initializes a Kevent from an posix.Kevent. This is used when
+/// kevent_init initializes a Kevent from a std.c.Kevent. This is used when
 /// the "ext" fields are zero.
-inline fn kevent_init(ev: posix.Kevent) Kevent {
-    if (Kevent == posix.Kevent) return ev;
+inline fn kevent_init(ev: std.c.Kevent) Kevent {
+    if (Kevent == std.c.Kevent) return ev;
 
     return .{
         .ident = ev.ident,
@@ -2003,7 +2075,7 @@ inline fn kevent_init(ev: posix.Kevent) Kevent {
 }
 
 comptime {
-    if (@sizeOf(Completion) != 256) {
+    if (@sizeOf(Completion) > 256) {
         @compileLog(@sizeOf(Completion));
         unreachable;
     }
@@ -2356,7 +2428,6 @@ test "kqueue: canceling a completed operation" {
 
 test "kqueue: socket accept/connect/send/recv/close" {
     const mem = std.mem;
-    const net = std.net;
     const testing = std.testing;
 
     var loop = try Loop.init(.{});
@@ -2365,19 +2436,19 @@ test "kqueue: socket accept/connect/send/recv/close" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    var ln = try posix.socket(address.any.family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
-    errdefer posix.close(ln);
+    var ln = try xev_posix.socket(address.any.family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    errdefer xev_posix.close(ln);
     try posix.setsockopt(ln, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try posix.bind(ln, &address.any, address.getOsSockLen());
-    try posix.listen(ln, kernel_backlog);
+    try xev_posix.bind(ln, &address.any, address.getOsSockLen());
+    try xev_posix.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
-    var client_conn = try posix.socket(
+    var client_conn = try xev_posix.socket(
         address.any.family,
         posix.SOCK.NONBLOCK | posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
         0,
     );
-    errdefer posix.close(client_conn);
+    errdefer xev_posix.close(client_conn);
 
     // Accept
     var server_conn: posix.socket_t = 0;
@@ -2625,6 +2696,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
 test "kqueue: file IO on thread pool" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
+    const io = testing.io;
 
     var tpool = ThreadPool.init(std.Thread.getCpuCount() catch 1);
     defer tpool.deinit();
@@ -2633,12 +2705,12 @@ test "kqueue: file IO on thread pool" {
 
     // Create our file
     const path = "test_watcher_file";
-    const f = try std.fs.cwd().createFile(path, .{
+    const f = try std.Io.Dir.cwd().createFile(io, path, .{
         .read = true,
         .truncate = true,
     });
-    defer f.close();
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer f.close(io);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
     // Perform a write and then a read
     var write_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
@@ -2673,10 +2745,10 @@ test "kqueue: file IO on thread pool" {
     try loop.run(.until_done);
 
     // Make sure the data is on disk
-    try f.sync();
+    try f.sync(io);
 
-    const f2 = try std.fs.cwd().openFile(path, .{});
-    defer f2.close();
+    const f2 = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer f2.close(io);
 
     // Read
     var read_buf: [128]u8 = undefined;
@@ -2729,7 +2801,7 @@ test "kqueue: mach port" {
         darwin.KernE.SUCCESS,
         darwin.getKernError(posix.system.mach_port_allocate(
             mach_self,
-            @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
+            posix.system.MACH.PORT.RIGHT.RECEIVE,
             &mach_port,
         )),
     );
@@ -2770,7 +2842,7 @@ test "kqueue: mach port" {
 
     // Send a message to the port
     var msg: darwin.mach_msg_header_t = .{
-        .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+        .msgh_bits = @intFromEnum(posix.system.MACH.MSG.TYPE.MAKE_SEND_ONCE),
         .msgh_size = @sizeOf(darwin.mach_msg_header_t),
         .msgh_remote_port = mach_port,
         .msgh_local_port = darwin.MACH_PORT_NULL,
@@ -2820,7 +2892,7 @@ test "kqueue: timer armed from delayed callback must not fire early" {
         darwin.KernE.SUCCESS,
         darwin.getKernError(posix.system.mach_port_allocate(
             mach_self,
-            @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
+            posix.system.MACH.PORT.RIGHT.RECEIVE,
             &mach_port,
         )),
     );
@@ -2843,7 +2915,7 @@ test "kqueue: timer armed from delayed callback must not fire early" {
             r: Result,
         ) CallbackAction {
             const s: *State = @ptrCast(@alignCast(ud.?));
-            s.timer_fired_ns = std.time.nanoTimestamp();
+            s.timer_fired_ns = monotonicNanos();
             s.timer_trigger = r.timer catch unreachable;
             return .disarm;
         }
@@ -2867,7 +2939,7 @@ test "kqueue: timer armed from delayed callback must not fire early" {
             ) CallbackAction {
                 _ = r.machport catch unreachable;
                 const s: *State = @ptrCast(@alignCast(ud.?));
-                s.timer_started_ns = std.time.nanoTimestamp();
+                s.timer_started_ns = monotonicNanos();
                 l.timer(&s.timer_completion, timer_delay_ms, s, timer_cb);
                 return .disarm;
             }
@@ -2878,10 +2950,14 @@ test "kqueue: timer armed from delayed callback must not fire early" {
     // Send to the mach port only after the loop has been blocked for a while.
     const sender = try std.Thread.spawn(.{}, (struct {
         fn run(port: posix.system.mach_port_name_t) void {
-            std.Thread.sleep(send_delay_ms * std.time.ns_per_ms);
+            std.Io.sleep(
+                std.Io.Threaded.global_single_threaded.io(),
+                .fromMilliseconds(@intCast(send_delay_ms)),
+                .awake,
+            ) catch unreachable;
 
             var msg: darwin.mach_msg_header_t = .{
-                .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+                .msgh_bits = @intFromEnum(posix.system.MACH.MSG.TYPE.MAKE_SEND_ONCE),
                 .msgh_size = @sizeOf(darwin.mach_msg_header_t),
                 .msgh_remote_port = port,
                 .msgh_local_port = darwin.MACH_PORT_NULL,
@@ -2914,7 +2990,6 @@ test "kqueue: timer armed from delayed callback must not fire early" {
 
 test "kqueue: socket accept/cancel cancellation should decrease active count" {
     const mem = std.mem;
-    const net = std.net;
     const testing = std.testing;
 
     //if (true) return error.SkipZigTest;
@@ -2925,11 +3000,11 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    var ln = try posix.socket(address.any.family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
-    errdefer posix.close(ln);
+    var ln = try xev_posix.socket(address.any.family, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    errdefer xev_posix.close(ln);
     try posix.setsockopt(ln, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try posix.bind(ln, &address.any, address.getOsSockLen());
-    try posix.listen(ln, kernel_backlog);
+    try xev_posix.bind(ln, &address.any, address.getOsSockLen());
+    try xev_posix.listen(ln, kernel_backlog);
 
     // Accept
     var server_conn: posix.socket_t = 0;

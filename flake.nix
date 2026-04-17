@@ -24,11 +24,7 @@
       # Other overlays
       (final: prev: rec {
         zigpkgs = inputs.zig.packages.${prev.system};
-        zig = inputs.zig.packages.${prev.system}."0.14.1";
-
-        # Latest versions
-        wasmtime = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmtime;
-        wasmer = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmer;
+        zig = inputs.zig.packages.${prev.system}."0.16.0";
 
         # Our package
         libxev = prev.callPackage ./nix/package.nix {};
